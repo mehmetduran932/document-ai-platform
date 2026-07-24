@@ -66,12 +66,55 @@ services:
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
-      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      VOYAGE_EMBEDDING_MODEL: ${VOYAGE_EMBEDDING_MODEL:-voyage-3.5}
+      VOYAGE_BASE_URL: ${VOYAGE_BASE_URL:-https://api.voyageai.com/v1}
+      # 1024, not 1536: Voyage's output_dimension only accepts {256,512,1024,2048}; Gemini/OpenAI
+      # both truncate to whatever this is set to, so 1024 works for all three fallback vendors.
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
+      # 'fallback' (Gemini->OpenAI->Voyage, default) or 'e5' (local multilingual-e5-small via the
+      # embeddings service below). Only takes effect when SEARCH_PROVIDER=embedding.
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-fallback}
+      E5_BASE_URL: ${E5_BASE_URL:-http://embeddings:80}
+      E5_MODEL: ${E5_MODEL:-intfloat/multilingual-e5-small}
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
+      RERANKER_BASE_URL: ${RERANKER_BASE_URL:-http://reranker:80}
+      RERANKER_CANDIDATE_POOL_MULTIPLIER: ${RERANKER_CANDIDATE_POOL_MULTIPLIER:-3}
     ports:
       - "${SERVER_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+
+  embeddings:
+    # Hugging Face Text Embeddings Inference, serving multilingual-e5-small locally over an
+    # OpenAI-compatible /v1/embeddings route. Only reached by the backend container over the
+    # compose network (E5_BASE_URL above), so no host port is published.
+    # Pinned past cpu-1.5, which has a known "relative URL without a base" model-download bug
+    # (https://github.com/huggingface/text-embeddings-inference/issues/527), fixed in 1.6.1/1.7.0.
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    container_name: document-ai-embeddings
+    # auto-truncate: multilingual-e5-small has a hard 512-token limit (BERT-style position
+    # embeddings), but document_chunks are chunked to 400-700 *words*, which can exceed 512
+    # *tokens* - without this flag TEI 413s on longer chunks instead of truncating them.
+    command: ["--model-id", "intfloat/multilingual-e5-small", "--auto-truncate"]
+    volumes:
+      - e5_model_cache:/data
+    restart: unless-stopped
+
+  reranker:
+    # Cross-encoder reranking over the embedding search candidates, to counter e5-small's narrow
+    # cosine-similarity range (observed 0.81-0.84 for both relevant and irrelevant Turkish chunks in
+    # the same workspace). mmarco-mMiniLMv2-L12-H384-v1 (~117M params) chosen over heavier options
+    # like bge-reranker-v2-m3 (~568M) to fit this deployment's 4GB RAM budget - see the embedding
+    # subsystem plan for the full tradeoff. Disabled by default (RERANKER_ENABLED=false) until
+    # empirically validated for latency/quality on this hardware.
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    container_name: document-ai-reranker
+    command: ["--model-id", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"]
+    volumes:
+      - reranker_model_cache:/data
     restart: unless-stopped
 
   frontend:
@@ -92,3 +135,5 @@ services:
 volumes:
   postgres_data:
   pgadmin_data:
+  e5_model_cache:
+  reranker_model_cache:

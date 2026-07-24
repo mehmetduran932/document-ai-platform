@@ -12,4 +12,7 @@ public record SearchResultChunk(
         String content,
         double relevanceScore
 ) {
+    public SearchResultChunk withScore(double newScore) {
+        return new SearchResultChunk(chunkId, documentId, documentFilename, page, chunkIndex, content, newScore);
+    }
 }

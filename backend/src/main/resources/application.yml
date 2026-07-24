@@ -84,18 +84,45 @@ app:
   # config change only; nothing above SearchProvider knows which one is active.
   search-provider: ${SEARCH_PROVIDER:keyword}
 
-  # FallbackEmbeddingProvider tries gemini first (cheap/free quota), then openai on failure.
-  # dimensions must match the pgvector column width (V3 migration: vector(1536)).
+  # Which EmbeddingProvider bean is active when search-provider=embedding. 'fallback' (default) is
+  # FallbackEmbeddingProvider (Gemini -> OpenAI -> Voyage, in that order); 'e5' is
+  # E5EmbeddingProvider, a locally-hosted intfloat/multilingual-e5-small instance (e.g. via Hugging
+  # Face TEI). These are mutually exclusive - e5's vector space is not compatible with the fallback
+  # trio's, so only one provider bean exists at a time.
+  embedding-provider: ${EMBEDDING_PROVIDER:fallback}
+
+  # dimensions must match the pgvector column width. Only read by the gemini/openai/voyage clients
+  # for their own truncation logic - e5's 384-dim output isn't truncatable, so E5EmbeddingProvider
+  # never references this value. Default is 1024, not 1536, because Voyage's output_dimension only
+  # accepts {256, 512, 1024, 2048} - Gemini and OpenAI both truncate to an arbitrary size just fine,
+  # so 1024 is the value all three fallback-chain vendors can produce. Changing this (or switching
+  # provider) requires a new Flyway migration to resize document_chunks.embedding to match.
   embedding:
-    dimensions: ${EMBEDDING_DIMENSIONS:1536}
+    dimensions: ${EMBEDDING_DIMENSIONS:1024}
     gemini:
       api-key: ${GEMINI_API_KEY:}
       model: ${GEMINI_EMBEDDING_MODEL:gemini-embedding-001}
       base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta}
+    voyage:
+      api-key: ${VOYAGE_API_KEY:}
+      model: ${VOYAGE_EMBEDDING_MODEL:voyage-3.5}
+      base-url: ${VOYAGE_BASE_URL:https://api.voyageai.com/v1}
     openai:
       api-key: ${OPENAI_API_KEY:}
       model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
       base-url: ${OPENAI_EMBEDDING_BASE_URL:https://api.openai.com/v1}
+    e5:
+      base-url: ${E5_BASE_URL:http://embeddings:80}
+      model: ${E5_MODEL:intfloat/multilingual-e5-small}
+
+  # Cross-encoder reranking of EmbeddingSearchProvider's candidates (off by default - see the
+  # embedding subsystem plan for why: the smallest TEI-compatible multilingual reranker that fits
+  # this deployment's RAM budget isn't confirmed-trained on Turkish, so validate quality/latency on
+  # real data before enabling in production).
+  reranker:
+    enabled: ${RERANKER_ENABLED:false}
+    base-url: ${RERANKER_BASE_URL:http://reranker:80}
+    candidate-pool-multiplier: ${RERANKER_CANDIDATE_POOL_MULTIPLIER:3}
 
   # AnswerProvider selection for POST /api/ask. 'claude' or 'openai'. The OpenAI client also works
   # against any OpenAI-API-compatible local model server (Ollama, LM Studio, vLLM) - just point
