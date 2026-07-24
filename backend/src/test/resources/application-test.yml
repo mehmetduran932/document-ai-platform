@@ -1,0 +1,10 @@
+app:
+  storage:
+    r2:
+      endpoint: http://localhost:9000
+      access-key: test-access-key
+      secret-key: test-secret-key
+      bucket: test-bucket
+      region: auto
+  jwt:
+    secret: test-only-secret-not-for-production-minimum-256-bits-long-value

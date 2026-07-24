@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://postgres:5432/${DB_NAME:document_ai}
+
+app:
+  processing:
+    tesseract-data-path: /usr/share/tesseract-ocr/5/tessdata

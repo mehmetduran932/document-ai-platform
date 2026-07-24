@@ -1,0 +1,79 @@
+services:
+  postgres:
+    # pgvector/pgvector:pg16 is a drop-in Postgres 16 image with the pgvector extension
+    # available (not auto-enabled) - same data directory format as postgres:16-alpine, so
+    # existing volumes keep working. Needed for EmbeddingSearchProvider.
+    image: pgvector/pgvector:pg16
+    container_name: document-ai-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-document_ai}
+      POSTGRES_USER: ${DB_USERNAME:-document_ai}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-document_ai}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-document_ai} -d ${DB_NAME:-document_ai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: document-ai-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@document-ai-platform.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: document-ai-backend
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_NAME: ${DB_NAME:-document_ai}
+      DB_USERNAME: ${DB_USERNAME:-document_ai}
+      DB_PASSWORD: ${DB_PASSWORD:-document_ai}
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set - generate with 'openssl rand -base64 48'}"
+      # R2 is only required for document upload/download; auth, search, and MCP tooling work
+      # without it, so these are NOT hard-required at container startup like JWT_SECRET is.
+      R2_ENDPOINT: ${R2_ENDPOINT:-https://placeholder.r2.cloudflarestorage.com}
+      R2_ACCESS_KEY: ${R2_ACCESS_KEY:-placeholder}
+      R2_SECRET_KEY: ${R2_SECRET_KEY:-placeholder}
+      R2_BUCKET: ${R2_BUCKET:-document-ai-platform}
+      R2_REGION: ${R2_REGION:-auto}
+      TESSERACT_LANG: ${TESSERACT_LANG:-eng}
+      FTS_LANGUAGE: ${FTS_LANGUAGE:-simple}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-keyword}
+      ANSWER_PROVIDER: ${ANSWER_PROVIDER:-claude}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-6}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  pgadmin_data:

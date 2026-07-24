@@ -1,0 +1,134 @@
+spring:
+  application:
+    name: document-ai-platform
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/document_ai}
+    username: ${DB_USERNAME:document_ai}
+    password: ${DB_PASSWORD:document_ai}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    placeholders:
+      ftsLanguage: ${app.processing.fts-language:simple}
+
+  servlet:
+    multipart:
+      max-file-size: ${MAX_UPLOAD_SIZE:100MB}
+      max-request-size: ${MAX_UPLOAD_SIZE:100MB}
+
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: always
+    include-binding-errors: always
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:change-this-secret-in-production-minimum-256-bits-long-please}
+    access-token-ttl-minutes: ${JWT_ACCESS_TTL_MIN:60}
+    refresh-token-ttl-days: ${JWT_REFRESH_TTL_DAYS:14}
+
+  # StorageProvider (R2StorageProvider) uses the AWS S3 SDK v2, so this same config works
+  # unchanged against real AWS S3 or a self-hosted MinIO - not just Cloudflare R2. To switch:
+  # AWS S3   -> drop 'endpoint' (or set it to the regional AWS endpoint) and set a real region.
+  # MinIO    -> point 'endpoint' at your MinIO host (e.g. http://minio:9000).
+  # No code change either way; StorageProvider is the only seam that matters.
+  storage:
+    r2:
+      endpoint: ${R2_ENDPOINT:}
+      access-key: ${R2_ACCESS_KEY:}
+      secret-key: ${R2_SECRET_KEY:}
+      bucket: ${R2_BUCKET:document-ai-platform}
+      region: ${R2_REGION:auto}
+
+  processing:
+    chunk-min-words: 400
+    chunk-max-words: 700
+    chunk-overlap-words: 50
+    tesseract-data-path: ${TESSDATA_PREFIX:/usr/share/tesseract-ocr/5/tessdata}
+    tesseract-language: ${TESSERACT_LANG:eng}
+    # Postgres text-search regconfig. 'simple' is language-neutral (no stemming) and safe as a
+    # default for mixed-language (e.g. Turkish + English) corpora. Set to 'turkish' or 'english'
+    # if your workspace's documents are reliably in one language for better ranking via stemming.
+    # This same value drives both the document-side tsvector trigger (V1 migration, via Flyway
+    # placeholder) and the query-side plainto_tsquery() call in KeywordSearchProvider - they must
+    # always match or ranking silently breaks.
+    fts-language: ${FTS_LANGUAGE:simple}
+
+  search:
+    max-results: 8
+    max-answer-chunks: ${MAX_ANSWER_CHUNKS:3}
+    content-preview-chars: ${CONTENT_PREVIEW_CHARS:300}
+
+  mcp:
+    enabled: ${MCP_ENABLED:true}
+
+  # SearchProvider selection. 'keyword' (Postgres FTS, default) or 'embedding' (pgvector +
+  # semantic matching - required for e.g. "poliçe tutarı" to find "prim tutarı"). Swapping is a
+  # config change only; nothing above SearchProvider knows which one is active.
+  search-provider: ${SEARCH_PROVIDER:keyword}
+
+  # FallbackEmbeddingProvider tries gemini first (cheap/free quota), then openai on failure.
+  # dimensions must match the pgvector column width (V3 migration: vector(1536)).
+  embedding:
+    dimensions: ${EMBEDDING_DIMENSIONS:1536}
+    gemini:
+      api-key: ${GEMINI_API_KEY:}
+      model: ${GEMINI_EMBEDDING_MODEL:gemini-embedding-001}
+      base-url: ${GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta}
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+      base-url: ${OPENAI_EMBEDDING_BASE_URL:https://api.openai.com/v1}
+
+  # AnswerProvider selection for POST /api/ask. 'claude' or 'openai'. The OpenAI client also works
+  # against any OpenAI-API-compatible local model server (Ollama, LM Studio, vLLM) - just point
+  # openai.base-url at it and set this to 'openai'.
+  answer-provider: ${ANSWER_PROVIDER:claude}
+
+  claude:
+    api-key: ${CLAUDE_API_KEY:}
+    model: ${CLAUDE_MODEL:claude-sonnet-4-6}
+    max-tokens: ${CLAUDE_MAX_TOKENS:4000}
+    api-version: ${CLAUDE_API_VERSION:2023-06-01}
+    base-url: ${CLAUDE_BASE_URL:https://api.anthropic.com}
+
+  openai:
+    api-key: ${OPENAI_API_KEY:}
+    model: ${OPENAI_MODEL:gpt-5.4}
+    max-tokens: ${OPENAI_MAX_TOKENS:4000}
+    base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+logging:
+  level:
+    root: INFO
+    com.documentai.platform: DEBUG
+    org.hibernate.SQL: WARN
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
