@@ -10,7 +10,7 @@ relevant chunks via MCP - never whole documents.
 ### Run it
 
 ```bash
-cp .env.example .env   # fill in JWT_SECRET (openssl rand -base64 48) and R2_* credentials
+cp .env.dev .env   # fill in JWT_SECRET (openssl rand -base64 48) and R2_* credentials
 docker compose up --build
 ```
 
