@@ -166,6 +166,24 @@ footprint (~117M params, fits a 4GB-RAM deployment); its training data (mMARCO) 
 Turkish, so any Turkish benefit comes from cross-lingual transfer, not in-language fine-tuning -
 validate quality/latency on your own data before relying on it in production.
 
+#### Only run the `embeddings`/`reranker` containers you actually use
+
+Both are gated behind [Compose profiles](https://docs.docker.com/compose/how-tos/profiles/) so they
+don't start (and consume RAM/CPU) unless asked for - set `COMPOSE_PROFILES` in `.env`
+(comma-separated, no spaces):
+
+| You want | Set |
+| --- | --- |
+| `EMBEDDING_PROVIDER=fallback`, no reranker | `COMPOSE_PROFILES=` (empty/unset) |
+| `EMBEDDING_PROVIDER=e5` | `COMPOSE_PROFILES=e5` |
+| `RERANKER_ENABLED=true` (either embedding provider) | add `reranker`, e.g. `COMPOSE_PROFILES=e5,reranker` |
+
+These don't derive each other automatically - keep `COMPOSE_PROFILES` in sync by hand whenever you
+change `EMBEDDING_PROVIDER`/`RERANKER_ENABLED`. Switching away from a profile you'd previously
+activated doesn't stop its container on its own either; run `docker compose stop embeddings` (or
+`reranker`) once after removing it from `COMPOSE_PROFILES`, on a small/resource-constrained
+deployment especially - an idle TEI container still holds its model in memory.
+
 ### Tests
 
 ```bash

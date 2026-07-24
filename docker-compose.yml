@@ -98,6 +98,11 @@ services:
     # compose network (E5_BASE_URL above), so no host port is published.
     # Pinned past cpu-1.5, which has a known "relative URL without a base" model-download bug
     # (https://github.com/huggingface/text-embeddings-inference/issues/527), fixed in 1.6.1/1.7.0.
+    #
+    # profiles: only starts when the 'e5' profile is active (COMPOSE_PROFILES=e5 in .env, or
+    # `docker compose --profile e5 up`) - pointless to run this alongside EMBEDDING_PROVIDER=fallback,
+    # which never calls it, especially on a resource-constrained (2 vCPU/4GB) deployment.
+    profiles: ["e5"]
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
     container_name: document-ai-embeddings
     # auto-truncate: multilingual-e5-small has a hard 512-token limit (BERT-style position
@@ -115,6 +120,11 @@ services:
     # like bge-reranker-v2-m3 (~568M) to fit this deployment's 4GB RAM budget - see the embedding
     # subsystem plan for the full tradeoff. Disabled by default (RERANKER_ENABLED=false) until
     # empirically validated for latency/quality on this hardware.
+    #
+    # profiles: only starts when the 'reranker' profile is active (COMPOSE_PROFILES=reranker in
+    # .env, or `docker compose --profile reranker up`) - keep this out of RERANKER_ENABLED=false
+    # deployments entirely rather than running an idle container.
+    profiles: ["reranker"]
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
     container_name: document-ai-reranker
     # auto-truncate: same 512-token BERT-style limit as the embeddings service - document_chunks
