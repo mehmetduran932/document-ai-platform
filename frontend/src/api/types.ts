@@ -90,6 +90,13 @@ export interface AskResponse {
   sourceChunks: SearchResultResponse[]
 }
 
+export interface AskHistoryResponse {
+  id: string
+  question: string
+  answer: string
+  createdAt: string
+}
+
 export interface CreateApiKeyRequest {
   name: string
 }

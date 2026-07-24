@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from 'react'
-import { SendIcon } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { SendIcon, Trash2Icon } from 'lucide-react'
 
 import { searchApi } from '@/api/search'
 import { ChunkViewerDialog } from '@/components/ChunkViewerDialog'
@@ -20,7 +20,27 @@ export function AskPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [question, setQuestion] = useState('')
   const [asking, setAsking] = useState(false)
+  const [loadingHistory, setLoadingHistory] = useState(true)
   const [activeChunk, setActiveChunk] = useState<SearchResultResponse | null>(null)
+
+  useEffect(() => {
+    searchApi
+      .askHistory()
+      .then((page) => {
+        const history = page.content
+          .slice()
+          .reverse()
+          .flatMap<ChatMessage>((entry) => [
+            { id: `${entry.id}-q`, role: 'user', content: entry.question },
+            { id: `${entry.id}-a`, role: 'assistant', content: entry.answer },
+          ])
+        setMessages(history)
+      })
+      .catch(() => {
+        // History is a convenience; a failed load shouldn't block asking new questions.
+      })
+      .finally(() => setLoadingHistory(false))
+  }, [])
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -53,12 +73,32 @@ export function AskPage() {
     }
   }
 
+  async function handleClearHistory() {
+    if (!confirm('Clear all ask history for this workspace? This cannot be undone.')) return
+    try {
+      await searchApi.clearAskHistory()
+      setMessages([])
+    } catch {
+      // Leave messages as-is; the user can retry the clear action.
+    }
+  }
+
   return (
     <div className="flex h-[calc(100svh-10rem)] flex-col gap-4">
-      <h1 className="text-2xl font-semibold">Ask</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold">Ask</h1>
+        {messages.length > 0 && (
+          <Button variant="outline" size="sm" onClick={handleClearHistory}>
+            <Trash2Icon /> Clear history
+          </Button>
+        )}
+      </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto rounded-lg border p-4">
-        {messages.length === 0 && (
+        {loadingHistory && (
+          <p className="text-muted-foreground text-center text-sm">Loading history…</p>
+        )}
+        {!loadingHistory && messages.length === 0 && (
           <p className="text-muted-foreground text-center text-sm">
             Ask a question grounded in your uploaded documents.
           </p>
