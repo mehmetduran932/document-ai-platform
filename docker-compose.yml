@@ -74,6 +74,21 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Runs in the user's browser on the host, not inside the compose network - must be
+        # reachable from there, so it points at the published backend port, not a service name.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+    container_name: document-ai-frontend
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   pgadmin_data:
