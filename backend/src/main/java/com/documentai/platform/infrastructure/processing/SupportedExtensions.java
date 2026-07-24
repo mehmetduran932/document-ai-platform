@@ -10,8 +10,9 @@ public final class SupportedExtensions {
     public static final Set<String> WORD = Set.of("doc", "docx");
     public static final Set<String> EXCEL = Set.of("xls", "xlsx");
     public static final Set<String> IMAGE = Set.of("png", "jpg", "jpeg", "tiff", "tif", "bmp", "gif");
+    public static final Set<String> MARKDOWN = Set.of("md");
 
-    public static final Set<String> ALL = Stream.of(PDF, WORD, EXCEL, IMAGE)
+    public static final Set<String> ALL = Stream.of(PDF, WORD, EXCEL, IMAGE, MARKDOWN)
             .flatMap(Set::stream)
             .collect(Collectors.toUnmodifiableSet());
 

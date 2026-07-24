@@ -1,5 +1,6 @@
 package com.documentai.platform.controller;
 
+import com.documentai.platform.dto.response.BulkUploadResponse;
 import com.documentai.platform.dto.response.DocumentChunkResponse;
 import com.documentai.platform.dto.response.DocumentResponse;
 import com.documentai.platform.dto.response.PageResponse;
@@ -20,6 +21,8 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -32,11 +35,30 @@ public class DocumentController {
     private final DocumentService documentService;
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @Operation(summary = "Upload a document (PDF, Word, Excel, or image); processing runs asynchronously")
+    @Operation(summary = "Upload a document (PDF, Word, Excel, Markdown, or image); processing runs asynchronously")
     public ResponseEntity<DocumentResponse> upload(@RequestParam("file") MultipartFile file) {
         DocumentResponse response = documentService.uploadDocument(
                 SecurityUtils.currentWorkspaceId(), SecurityUtils.currentUserId(), file);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    }
+
+    @PostMapping(value = "/bulk", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Upload multiple documents in one request; each file is uploaded independently so one "
+            + "unsupported/invalid file doesn't block the rest, and processing runs asynchronously per document")
+    public ResponseEntity<BulkUploadResponse> uploadBulk(@RequestParam("files") List<MultipartFile> files) {
+        UUID workspaceId = SecurityUtils.currentWorkspaceId();
+        UUID userId = SecurityUtils.currentUserId();
+
+        List<DocumentResponse> uploaded = new ArrayList<>();
+        List<BulkUploadResponse.Failure> failed = new ArrayList<>();
+        for (MultipartFile file : files) {
+            try {
+                uploaded.add(documentService.uploadDocument(workspaceId, userId, file));
+            } catch (RuntimeException e) {
+                failed.add(new BulkUploadResponse.Failure(file.getOriginalFilename(), e.getMessage()));
+            }
+        }
+        return ResponseEntity.status(HttpStatus.CREATED).body(new BulkUploadResponse(uploaded, failed));
     }
 
     @GetMapping

@@ -144,6 +144,7 @@ public class DocumentServiceImpl implements DocumentService {
             case "tif", "tiff" -> "image/tiff";
             case "bmp" -> "image/bmp";
             case "gif" -> "image/gif";
+            case "md" -> "text/markdown";
             default -> "application/octet-stream";
         };
     }

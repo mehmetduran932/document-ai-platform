@@ -8,14 +8,16 @@ import org.springframework.stereotype.Component;
 
 import java.io.InputStream;
 
-/** Handles PDF and Word documents via Apache Tika's auto-detecting parser. */
+/** Handles PDF, Word, and Markdown documents via Apache Tika's auto-detecting parser. */
 @Component
 public class TikaTextExtractor implements TextExtractor {
 
     @Override
     public boolean supports(String extension) {
-        return SupportedExtensions.PDF.contains(extension.toLowerCase())
-                || SupportedExtensions.WORD.contains(extension.toLowerCase());
+        String ext = extension.toLowerCase();
+        return SupportedExtensions.PDF.contains(ext)
+                || SupportedExtensions.WORD.contains(ext)
+                || SupportedExtensions.MARKDOWN.contains(ext);
     }
 
     @Override
