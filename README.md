@@ -111,6 +111,12 @@ HTTP MCP):
 **Anthropic/Claude has no embeddings API** - if you were expecting a Claude option here, that's why
 it's Voyage AI instead (Anthropic's own recommended embeddings vendor).
 
+**`EMBEDDING_CHAIN_ENABLED`** (default `true`) controls whether `fallback` actually falls back at
+all. Set it to `false` and `EMBEDDING_PRIMARY_VENDOR` to `gemini`/`openai`/`voyage` to pin to exactly
+one vendor with no cross-vendor substitution - it either serves the call or the exception propagates,
+never silently swaps vendors. Useful for deployments that want deterministic behavior over
+resilience.
+
 #### Why this is one config value, not two independent knobs
 
 `document_chunks.embedding` is a single `pgvector` column with a fixed width (`vector(N)`). Every
@@ -127,19 +133,25 @@ runtime config value would mean a typo in an env var could silently destroy prod
 with no review step - schema changes stay versioned, reviewable SQL files, same as every other
 migration in this project.
 
-#### What *is* automated: re-embedding after a width change
+#### What *is* automated: re-embedding after a width change or vendor drift
 
 Dropping/re-adding the column (or any provider swap) leaves every existing chunk with
-`embedding = NULL`, which is invisible to `EmbeddingSearchProvider` (its query has
-`WHERE embedding IS NOT NULL`). `EmbeddingBackfillRunner`
+`embedding = NULL`, which is invisible to `EmbeddingSearchProvider` (its query requires a non-null
+embedding *and* a matching `embedding_model`). `EmbeddingBackfillRunner`
 (`infrastructure/embedding/EmbeddingBackfillRunner.java`) runs on every backend startup, finds every
-document with at least one null-embedding chunk, and re-triggers processing for it automatically -
-no manual per-document `POST /api/documents/{id}/reprocess` loop needed. It does **not** detect the
-subtler case of non-null embeddings from *different, incompatible* vendors coexisting in the column
-(e.g. `FallbackEmbeddingProvider` silently switching from Gemini to OpenAI mid-run because Gemini's
-quota ran out) - those vectors are technically the right width but come from different vector
-spaces, so cosine similarity between them is meaningless. That's a known, pre-existing gap, not
-something this runner claims to fix.
+document with at least one chunk that's missing an embedding or doesn't match the dominant vendor
+(see `ChunkEmbeddingWriter.findDocumentIdsNeedingReembedding()`), and re-triggers processing for it
+automatically - no manual per-document `POST /api/documents/{id}/reprocess` loop needed.
+
+This also covers vendor drift within `fallback` mode: `document_chunks.embedding_model` records
+exactly which vendor/model produced each vector (e.g. `openai:text-embedding-3-small`), and
+`EmbeddingSearchProvider` filters on it so a query never compares against a chunk from a
+*different*, incompatible vendor's vector space (cosine similarity between e.g. a Gemini vector and
+an OpenAI vector is meaningless even at the same width). `FallbackEmbeddingProvider` also keeps an
+in-memory "sticky" vendor - once one succeeds, it's tried first on the next call - specifically to
+prevent this drift from happening in the first place (a burst of calls served by OpenAI because
+Gemini was rate-limited, followed by a lone later call that happens to catch Gemini recovered,
+otherwise silently mixes two vector spaces in the same search).
 
 #### Reranker (optional, off by default)
 
@@ -277,6 +289,12 @@ seçilir:
 **Anthropic/Claude'un hiçbir embedding API'si yoktur** - burada Claude seçeneği beklediyseniz,
 yerine Voyage AI'ın olma sebebi budur (Anthropic'in kendi önerdiği embedding sağlayıcısı).
 
+**`EMBEDDING_CHAIN_ENABLED`** (varsayılan `true`), `fallback`'ın gerçekten fallback yapıp
+yapmayacağını kontrol eder. `false` yapıp `EMBEDDING_PRIMARY_VENDOR`'ı `gemini`/`openai`/`voyage`
+olarak ayarlarsanız, çapraz-vendor ikamesi olmadan tek bir sağlayıcıya sabitlenir - ya çağrıyı
+karşılar ya da hata dışarı fırlar, hiçbir zaman sessizce başka bir sağlayıcıya geçmez. Direnç yerine
+deterministik davranış isteyen deployment'lar için kullanışlıdır.
+
 #### Neden tek bir config değeri, iki bağımsız ayar değil
 
 `document_chunks.embedding`, sabit genişlikli (`vector(N)`) tek bir `pgvector` kolonudur. Hangi
@@ -294,20 +312,27 @@ gözden geçirme adımı olmadan production embedding'lerini sessizce yok edebil
 şema değişiklikleri, bu projedeki her migration gibi versiyonlanmış, gözden geçirilebilir SQL
 dosyaları olarak kalır.
 
-#### Otomatik olan: genişlik değişikliğinden sonra yeniden embed etme
+#### Otomatik olan: genişlik değişikliği veya vendor kaymasından sonra yeniden embed etme
 
 Kolonu drop edip yeniden eklemek (veya herhangi bir provider değişikliği), mevcut her chunk'ı
-`embedding = NULL` bırakır; bu da `EmbeddingSearchProvider` için görünmezdir (sorgusunda
-`WHERE embedding IS NOT NULL` vardır). `EmbeddingBackfillRunner`
-(`infrastructure/embedding/EmbeddingBackfillRunner.java`) her backend başlangıcında çalışır, en az
-bir null-embedding chunk'ı olan her dokümanı bulur ve onun için işlemeyi otomatik olarak yeniden
-tetikler - elle doküman başına `POST /api/documents/{id}/reprocess` döngüsüne gerek kalmaz.
-Farklı, **uyumsuz** sağlayıcılardan gelen null-olmayan embedding'lerin aynı kolonda bir arada
-bulunması gibi daha ince bir durumu **tespit etmez** (örn. `FallbackEmbeddingProvider`'ın Gemini
-kotası bittiği için çalışma ortasında sessizce OpenAI'a geçmesi) - bu vektörler teknik olarak doğru
-genişliktedir ama farklı vektör uzaylarından gelir, yani aralarındaki cosine similarity anlamsızdır.
-Bu, bilinen ve önceden var olan bir sınırlamadır, bu runner'ın çözdüğünü iddia ettiği bir şey
-değildir.
+`embedding = NULL` bırakır; bu da `EmbeddingSearchProvider` için görünmezdir (sorgusu hem null
+olmayan bir embedding hem de eşleşen bir `embedding_model` gerektirir). `EmbeddingBackfillRunner`
+(`infrastructure/embedding/EmbeddingBackfillRunner.java`) her backend başlangıcında çalışır, ya
+embedding'i eksik ya da baskın vendor'la eşleşmeyen en az bir chunk'ı olan her dokümanı bulur
+(bkz. `ChunkEmbeddingWriter.findDocumentIdsNeedingReembedding()`) ve onun için işlemeyi otomatik
+olarak yeniden tetikler - elle doküman başına `POST /api/documents/{id}/reprocess` döngüsüne gerek
+kalmaz.
+
+Bu, `fallback` modundaki vendor kaymasını da kapsar: `document_chunks.embedding_model`, her
+vektörü hangi vendor/modelin ürettiğini tam olarak kaydeder (örn. `openai:text-embedding-3-small`),
+ve `EmbeddingSearchProvider` bunu filtreleyerek bir sorgunun asla **farklı, uyumsuz** bir vendor'ın
+vektör uzayından gelen bir chunk'la karşılaştırılmamasını sağlar (örn. bir Gemini vektörü ile bir
+OpenAI vektörü arasındaki cosine similarity, aynı genişlikte olsalar bile anlamsızdır).
+`FallbackEmbeddingProvider` ayrıca bellek içi "yapışkan" (sticky) bir vendor tutar - biri başarılı
+olduğunda, bir sonraki çağrıda önce o denenir - bu kayması en baştan önlemek içindir (Gemini
+kotası bittiği için bir çağrı grubunun OpenAI tarafından karşılanması, ardından şans eseri Gemini'nin
+toparlandığı anı yakalayan tek bir sorgu, aksi halde aynı aramada iki vektör uzayını sessizce
+karıştırırdı).
 
 #### Reranker (opsiyonel, varsayılan olarak kapalı)
 

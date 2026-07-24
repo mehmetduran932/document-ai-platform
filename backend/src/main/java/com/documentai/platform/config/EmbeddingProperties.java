@@ -16,6 +16,13 @@ import org.springframework.boot.context.properties.NestedConfigurationProperty;
 @ConfigurationProperties(prefix = "app.embedding")
 public record EmbeddingProperties(
         int dimensions,
+        /** When false, FallbackEmbeddingProvider calls only {@code primaryVendor} and never
+         *  substitutes another vendor on failure - for deployments that want deterministic,
+         *  fail-loud behavior instead of silent cross-vendor fallback. */
+        boolean chainEnabled,
+        /** gemini|openai|voyage - which single vendor to use when chainEnabled=false. Ignored
+         *  when chainEnabled=true. */
+        String primaryVendor,
         @NestedConfigurationProperty Gemini gemini,
         @NestedConfigurationProperty OpenAi openai,
         @NestedConfigurationProperty Voyage voyage,

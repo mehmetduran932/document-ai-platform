@@ -11,8 +11,20 @@ import java.util.List;
  */
 public interface EmbeddingProvider {
 
-    /** One embedding per input, same order as {@code texts}. Batched in one call where the vendor API allows it. */
-    List<float[]> embedBatch(List<String> texts);
+    /**
+     * {@code modelIdentity} names exactly which vendor/model produced {@code vector} (e.g.
+     * "openai:text-embedding-3-small"), persisted alongside it in
+     * {@code document_chunks.embedding_model} so a later query only ever compares vectors from
+     * the same vendor - vectors from different vendors are not comparable via cosine similarity
+     * even at the same dimensionality. Returned rather than fixed per-provider because
+     * FallbackEmbeddingProvider can only know which vendor actually served a given call after it
+     * succeeds.
+     */
+    record EmbeddingResult(float[] vector, String modelIdentity) {
+    }
 
-    float[] embed(String text);
+    /** One embedding per input, same order as {@code texts}. Batched in one call where the vendor API allows it. */
+    List<EmbeddingResult> embedBatch(List<String> texts);
+
+    EmbeddingResult embed(String text);
 }

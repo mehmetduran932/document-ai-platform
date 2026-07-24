@@ -11,8 +11,9 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Writes to document_chunks.embedding via native SQL, the same way the tsvector column is only
- * ever touched by KeywordSearchProvider - the JPA entity never maps the pgvector column type.
+ * Writes to document_chunks.embedding/embedding_model via native SQL, the same way the tsvector
+ * column is only ever touched by KeywordSearchProvider - the JPA entity never maps either pgvector-
+ * related column type.
  */
 @Component
 @RequiredArgsConstructor
@@ -22,12 +23,13 @@ public class ChunkEmbeddingWriter {
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
-    public void write(UUID chunkId, float[] embedding) {
+    public void write(UUID chunkId, EmbeddingProvider.EmbeddingResult result) {
         int rows = jdbcTemplate.update(
-                "UPDATE document_chunks SET embedding = CAST(:embedding AS vector) WHERE id = :id",
+                "UPDATE document_chunks SET embedding = CAST(:embedding AS vector), embedding_model = :embeddingModel WHERE id = :id",
                 new MapSqlParameterSource()
                         .addValue("id", chunkId)
-                        .addValue("embedding", PgVectorFormat.toLiteral(embedding)));
+                        .addValue("embedding", PgVectorFormat.toLiteral(result.vector()))
+                        .addValue("embeddingModel", result.modelIdentity()));
         if (rows == 0) {
             // Should be unreachable as long as callers flush pending chunk inserts first (see
             // DocumentProcessingServiceImpl) - kept as a loud signal in case that invariant ever breaks.
@@ -36,13 +38,22 @@ public class ChunkEmbeddingWriter {
     }
 
     /**
-     * Documents with at least one chunk left without an embedding - e.g. a migration just resized/
-     * reset document_chunks.embedding after an EMBEDDING_PROVIDER change. Used by
-     * {@link EmbeddingBackfillRunner} to automatically re-embed anything a schema or config change
-     * left stale, instead of requiring a manual per-document reprocess loop.
+     * Documents with at least one chunk that's either missing an embedding entirely, or embedded
+     * by a vendor/model other than the one most other chunks currently use (e.g. a burst of calls
+     * served by a fallback vendor while the primary was rate-limited, followed by a return to the
+     * primary - see FallbackEmbeddingProvider's sticky-vendor comment for the full scenario). Used
+     * by {@link EmbeddingBackfillRunner} to automatically re-embed anything a schema/config change
+     * or vendor drift left inconsistent, instead of requiring a manual per-document reprocess loop.
      */
-    public List<UUID> findDocumentIdsWithNullEmbedding() {
-        return jdbcTemplate.getJdbcTemplate().queryForList(
-                "SELECT DISTINCT document_id FROM document_chunks WHERE embedding IS NULL", UUID.class);
+    public List<UUID> findDocumentIdsNeedingReembedding() {
+        return jdbcTemplate.getJdbcTemplate().queryForList("""
+                SELECT DISTINCT document_id FROM document_chunks
+                WHERE embedding IS NULL
+                   OR embedding_model IS NULL
+                   OR embedding_model <> (
+                        SELECT mode() WITHIN GROUP (ORDER BY embedding_model)
+                        FROM document_chunks WHERE embedding_model IS NOT NULL
+                      )
+                """, UUID.class);
     }
 }

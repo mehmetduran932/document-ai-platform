@@ -13,15 +13,13 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Automatically re-embeds any document left with null embeddings by a schema or config change -
- * e.g. a migration that resized document_chunks.embedding after an EMBEDDING_PROVIDER switch. Before
- * this existed, fixing that required manually looping POST /api/documents/{id}/reprocess over every
- * affected document by hand; now the app heals itself on next restart.
- *
- * Deliberately does not check *which* model produced any non-null embeddings already present - only
- * whether they're null. Detecting "non-null but from a different, incompatible vendor" (e.g.
- * FallbackEmbeddingProvider silently switching from Gemini to OpenAI mid-run) would need a per-chunk
- * model-identity column and is a separate, lower-priority gap that predates this runner.
+ * Automatically re-embeds any document left with null or vendor-mismatched embeddings by a schema
+ * or config change - e.g. a migration that resized document_chunks.embedding after an
+ * EMBEDDING_PROVIDER switch, or FallbackEmbeddingProvider serving a burst of chunks with a fallback
+ * vendor while the primary was rate-limited. Before this existed, fixing the null case required
+ * manually looping POST /api/documents/{id}/reprocess over every affected document by hand; now the
+ * app heals itself on next restart - see
+ * {@link ChunkEmbeddingWriter#findDocumentIdsNeedingReembedding()} for exactly what counts as stale.
  */
 @Component
 @RequiredArgsConstructor
@@ -35,13 +33,13 @@ public class EmbeddingBackfillRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        List<UUID> staleDocumentIds = chunkEmbeddingWriter.findDocumentIdsWithNullEmbedding();
+        List<UUID> staleDocumentIds = chunkEmbeddingWriter.findDocumentIdsNeedingReembedding();
         if (staleDocumentIds.isEmpty()) {
             return;
         }
 
-        log.info("Backfilling embeddings for {} document(s) left stale by a config/migration change",
-                staleDocumentIds.size());
+        log.info("Backfilling embeddings for {} document(s) left stale by a config/migration change "
+                + "or vendor drift", staleDocumentIds.size());
         for (UUID documentId : staleDocumentIds) {
             documentProcessingService.process(documentId);
         }

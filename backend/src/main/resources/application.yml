@@ -99,6 +99,11 @@ app:
   # provider) requires a new Flyway migration to resize document_chunks.embedding to match.
   embedding:
     dimensions: ${EMBEDDING_DIMENSIONS:1024}
+    # Only relevant when embedding-provider=fallback. chain-enabled=false makes
+    # FallbackEmbeddingProvider call only primary-vendor, with no cross-vendor substitution on
+    # failure - for deployments that want deterministic, fail-loud behavior.
+    chain-enabled: ${EMBEDDING_CHAIN_ENABLED:true}
+    primary-vendor: ${EMBEDDING_PRIMARY_VENDOR:gemini}
     gemini:
       api-key: ${GEMINI_API_KEY:}
       model: ${GEMINI_EMBEDDING_MODEL:gemini-embedding-001}

@@ -22,6 +22,13 @@ import java.util.UUID;
  * list - the whole point of embeddings is capturing meaning (e.g. "poliçe tutarı" ~ "prim
  * tutarı") that literal keyword matching cannot.
  *
+ * Every query is embedded fresh, and (under FallbackEmbeddingProvider) which vendor actually serves
+ * it can vary call-to-call. Comparing that query vector against a chunk embedded by a *different*
+ * vendor via cosine similarity is meaningless even at the same width, so the query filters on
+ * embedding_model matching the query's own EmbeddingProvider.EmbeddingResult.modelIdentity() -
+ * chunks from a different vector space are excluded from these results rather than corrupting them,
+ * and stay excluded until EmbeddingBackfillRunner catches up and re-embeds them to match.
+ *
  * When a {@link RerankerClient} bean is present (app.reranker.enabled=true), a wider candidate pool
  * is pulled from pgvector and re-scored by the cross-encoder before truncating back down to
  * maxResults - bi-encoder cosine similarity alone was observed to compress scores into a narrow
@@ -45,6 +52,7 @@ public class EmbeddingSearchProvider implements SearchProvider {
             JOIN documents d ON d.id = c.document_id
             WHERE c.workspace_id = :workspaceId
               AND c.embedding IS NOT NULL
+              AND c.embedding_model = :embeddingModel
             ORDER BY c.embedding <=> CAST(:queryEmbedding AS vector)
             LIMIT :maxResults
             """;
@@ -63,7 +71,7 @@ public class EmbeddingSearchProvider implements SearchProvider {
             return List.of();
         }
 
-        float[] queryEmbedding = embeddingProvider.embed(text);
+        EmbeddingProvider.EmbeddingResult queryEmbedding = embeddingProvider.embed(text);
         boolean reranking = rerankerClient.isPresent();
         int candidatePoolSize = reranking
                 ? query.maxResults() * rerankerProperties.candidatePoolMultiplier()
@@ -71,7 +79,8 @@ public class EmbeddingSearchProvider implements SearchProvider {
 
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("workspaceId", query.workspaceId())
-                .addValue("queryEmbedding", PgVectorFormat.toLiteral(queryEmbedding))
+                .addValue("queryEmbedding", PgVectorFormat.toLiteral(queryEmbedding.vector()))
+                .addValue("embeddingModel", queryEmbedding.modelIdentity())
                 .addValue("maxResults", candidatePoolSize);
 
         List<SearchResultChunk> candidates = jdbcTemplate.query(SEARCH_SQL, params, (rs, rowNum) -> new SearchResultChunk(

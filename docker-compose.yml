@@ -75,6 +75,11 @@ services:
       # 'fallback' (Gemini->OpenAI->Voyage, default) or 'e5' (local multilingual-e5-small via the
       # embeddings service below). Only takes effect when SEARCH_PROVIDER=embedding.
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-fallback}
+      # Only relevant when EMBEDDING_PROVIDER=fallback. chain-enabled=false pins to exactly
+      # EMBEDDING_PRIMARY_VENDOR with no cross-vendor substitution on failure - for deployments
+      # that want deterministic, fail-loud behavior instead of silent fallback.
+      EMBEDDING_CHAIN_ENABLED: ${EMBEDDING_CHAIN_ENABLED:-true}
+      EMBEDDING_PRIMARY_VENDOR: ${EMBEDDING_PRIMARY_VENDOR:-gemini}
       E5_BASE_URL: ${E5_BASE_URL:-http://embeddings:80}
       E5_MODEL: ${E5_MODEL:-intfloat/multilingual-e5-small}
       RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
@@ -112,7 +117,9 @@ services:
     # empirically validated for latency/quality on this hardware.
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
     container_name: document-ai-reranker
-    command: ["--model-id", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"]
+    # auto-truncate: same 512-token BERT-style limit as the embeddings service - document_chunks
+    # (400-700 words) can exceed that in tokens, so truncate instead of 413ing.
+    command: ["--model-id", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1", "--auto-truncate"]
     volumes:
       - reranker_model_cache:/data
     restart: unless-stopped

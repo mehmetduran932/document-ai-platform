@@ -35,7 +35,7 @@ public class E5EmbeddingProvider implements EmbeddingProvider {
     private final RestClient restClient;
 
     @Override
-    public List<float[]> embedBatch(List<String> texts) {
+    public List<EmbeddingResult> embedBatch(List<String> texts) {
         if (texts.isEmpty()) {
             return List.of();
         }
@@ -44,13 +44,14 @@ public class E5EmbeddingProvider implements EmbeddingProvider {
     }
 
     @Override
-    public float[] embed(String text) {
+    public EmbeddingResult embed(String text) {
         return callTei(List.of("query: " + text)).get(0);
     }
 
-    private List<float[]> callTei(List<String> prefixedTexts) {
+    private List<EmbeddingResult> callTei(List<String> prefixedTexts) {
         EmbeddingProperties.E5 config = properties.e5();
         EmbeddingRequest request = new EmbeddingRequest(config.model(), prefixedTexts);
+        String modelIdentity = "e5:" + config.model();
 
         try {
             EmbeddingResponse response = restClient.post()
@@ -66,7 +67,7 @@ public class E5EmbeddingProvider implements EmbeddingProvider {
 
             return response.data().stream()
                     .sorted(Comparator.comparingInt(EmbeddingData::index))
-                    .map(EmbeddingData::embedding)
+                    .map(d -> new EmbeddingResult(d.embedding(), modelIdentity))
                     .toList();
         } catch (RestClientException e) {
             throw new EmbeddingGenerationException("e5 embedding call failed: " + e.getMessage(), e);

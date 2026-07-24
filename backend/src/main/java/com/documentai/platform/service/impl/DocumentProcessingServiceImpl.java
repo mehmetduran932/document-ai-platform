@@ -130,7 +130,7 @@ public class DocumentProcessingServiceImpl implements DocumentProcessingService 
         }
         embeddingProvider.ifPresent(provider -> {
             List<String> contents = savedChunks.stream().map(DocumentChunk::getContent).toList();
-            List<float[]> embeddings = provider.embedBatch(contents);
+            List<EmbeddingProvider.EmbeddingResult> embeddings = provider.embedBatch(contents);
             for (int i = 0; i < savedChunks.size(); i++) {
                 chunkEmbeddingWriter.write(savedChunks.get(i).getId(), embeddings.get(i));
             }
