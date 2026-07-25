@@ -80,17 +80,21 @@ services:
     # Containerized Ollama serving the Qwen model(s) already pulled by the host's native install -
     # the models directory is bind-mounted read-only so nothing needs re-downloading. Backend
     # reaches it at OPENAI_BASE_URL=http://ollama:11434/v1 (Ollama's OpenAI-compatible route).
+    #
+    # profiles: only starts when the 'ollama' profile is active - e5+reranker+a local Qwen model
+    # together exceeded this 3.8GB box's RAM even with every other app on the host stopped (e5 and
+    # reranker each peaked over 1.3GB while actively embedding), so this deployment moved fully to
+    # cloud APIs for both embedding and answer generation. Left here, gated off, for whoever wants
+    # to try local-model answers again on beefier hardware.
+    profiles: ["ollama"]
     image: ollama/ollama:latest
     container_name: document-ai-ollama
     environment:
-      # Default 4096 - lowered to shrink the KV cache memory footprint on this 3.8GB box. Not
-      # lowered further than this: /api/ask grounds on up to 3 chunks of 400-700 words each
+      # Default 4096 - lowered to shrink the KV cache memory footprint if this is ever re-enabled
+      # on constrained hardware. /api/ask grounds on up to 3 chunks of 400-700 words each
       # (app.search.max-answer-chunks) with full untruncated content, which in Turkish can run
-      # ~3000+ tokens before the question/prompt template - a smaller window risks silently
+      # ~3000+ tokens before the question/prompt template - too small a window risks silently
       # truncating grounding context.
-      # Pulled down further (was 3072) to save more memory while running alongside e5+reranker -
-      # risk: /api/ask's worst-case grounding (3 chunks x up to 700 words) can exceed this in
-      # Turkish, which would silently truncate context. Watch answer quality after this change.
       OLLAMA_CONTEXT_LENGTH: "2048"
     volumes:
       - /usr/share/ollama/.ollama:/root/.ollama:ro
