@@ -44,18 +44,32 @@ app:
     access-token-ttl-minutes: ${JWT_ACCESS_TTL_MIN:60}
     refresh-token-ttl-days: ${JWT_REFRESH_TTL_DAYS:14}
 
-  # StorageProvider (R2StorageProvider) uses the AWS S3 SDK v2, so this same config works
-  # unchanged against real AWS S3 or a self-hosted MinIO - not just Cloudflare R2. To switch:
-  # AWS S3   -> drop 'endpoint' (or set it to the regional AWS endpoint) and set a real region.
-  # MinIO    -> point 'endpoint' at your MinIO host (e.g. http://minio:9000).
-  # No code change either way; StorageProvider is the only seam that matters.
+  # Which StorageProvider bean is active. 'r2' (default) is R2StorageProvider (AWS S3 SDK v2 -
+  # works unchanged against real AWS S3 or a self-hosted MinIO too, not just Cloudflare R2).
+  # 'local' is LocalFileStorageProvider, a filesystem-backed store for local dev so you don't need
+  # a real bucket just to try the app - see the 'local' section below and README. Mutually
+  # exclusive; only one StorageProvider bean exists at a time.
+  storage-provider: ${STORAGE_PROVIDER:r2}
+
   storage:
+    # To switch R2 -> AWS S3   : drop 'endpoint' (or set it to the regional AWS endpoint), real region.
+    # To switch R2 -> MinIO    : point 'endpoint' at your MinIO host (e.g. http://minio:9000).
+    # No code change either way; StorageProvider is the only seam that matters. Only read when
+    # storage-provider=r2.
     r2:
       endpoint: ${R2_ENDPOINT:}
       access-key: ${R2_ACCESS_KEY:}
       secret-key: ${R2_SECRET_KEY:}
       bucket: ${R2_BUCKET:document-ai-platform}
       region: ${R2_REGION:auto}
+    # Only read when storage-provider=local. base-path should be a mounted volume (see
+    # docker-compose.yml's 'local_storage_data' volume) so files survive container recreation.
+    # public-base-url must be reachable by whoever calls presignedDownloadUrl()'s result (the
+    # browser locally, or an MCP agent) - defaults to the same host:port the backend itself
+    # listens on.
+    local:
+      base-path: ${LOCAL_STORAGE_PATH:/app/local-storage}
+      public-base-url: ${LOCAL_STORAGE_PUBLIC_BASE_URL:http://localhost:8080}
 
   processing:
     chunk-min-words: 400

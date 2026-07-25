@@ -12,7 +12,8 @@ final class AnswerPrompt {
         return "You answer questions using ONLY the numbered document excerpts the user provides. "
                 + "Never use outside knowledge. If the excerpts do not contain enough information to "
                 + "answer, say so plainly instead of guessing. When you use an excerpt, cite it by its "
-                + "source filename in parentheses.";
+                + "source filename in parentheses. Always answer in Turkish, regardless of the language "
+                + "of the question or the excerpts.";
     }
 
     static String user(String question, List<SourceChunk> chunks) {

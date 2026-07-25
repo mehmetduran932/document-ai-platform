@@ -54,6 +54,11 @@ services:
       R2_SECRET_KEY: ${R2_SECRET_KEY:-placeholder}
       R2_BUCKET: ${R2_BUCKET:-document-ai-platform}
       R2_REGION: ${R2_REGION:-auto}
+      # 'r2' (default, needs the R2_* vars above) or 'local' (LocalFileStorageProvider - stores
+      # uploads on the local_storage_data volume instead, no bucket/credentials needed).
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER:-r2}
+      LOCAL_STORAGE_PATH: ${LOCAL_STORAGE_PATH:-/app/local-storage}
+      LOCAL_STORAGE_PUBLIC_BASE_URL: ${LOCAL_STORAGE_PUBLIC_BASE_URL:-http://localhost:8080}
       TESSERACT_LANG: ${TESSERACT_LANG:-eng}
       FTS_LANGUAGE: ${FTS_LANGUAGE:-simple}
       SEARCH_PROVIDER: ${SEARCH_PROVIDER:-keyword}
@@ -88,6 +93,9 @@ services:
       RERANKER_CANDIDATE_POOL_MULTIPLIER: ${RERANKER_CANDIDATE_POOL_MULTIPLIER:-3}
     ports:
       - "${SERVER_PORT:-8080}:8080"
+    volumes:
+      # Only actually used when STORAGE_PROVIDER=local; harmless (empty, unmounted-by-app) otherwise.
+      - local_storage_data:/app/local-storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,6 +143,22 @@ services:
       - reranker_model_cache:/data
     restart: unless-stopped
 
+  ollama:
+    # Local Qwen (or any other Ollama model) for testing ANSWER_PROVIDER=openai against a local
+    # model instead of Claude/OpenAI - point OPENAI_BASE_URL at http://ollama:11434/v1 and set
+    # OPENAI_MODEL to whatever tag you've pulled (e.g. qwen2.5:1.5b). No models ship by default;
+    # after first `docker compose --profile ollama up -d ollama`, pull one with
+    # `docker exec document-ai-ollama ollama pull qwen2.5:1.5b` - cached in ollama_data afterward.
+    #
+    # profiles: only starts when the 'ollama' profile is active (COMPOSE_PROFILES=ollama in .env,
+    # or `docker compose --profile ollama up`).
+    profiles: ["ollama"]
+    image: ollama/ollama:latest
+    container_name: document-ai-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
@@ -155,3 +179,5 @@ volumes:
   pgadmin_data:
   e5_model_cache:
   reranker_model_cache:
+  ollama_data:
+  local_storage_data:

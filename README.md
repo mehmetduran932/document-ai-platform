@@ -20,7 +20,8 @@ docker compose up --build
 - MCP endpoint (for external agents): `POST http://localhost:8080/mcp` with header `X-API-Key: <key>`
 
 R2 credentials are only required for document upload/download; auth, search, and the rest of the
-API work without them.
+API work without them. Don't have a bucket handy? Set `STORAGE_PROVIDER=local` instead - see
+**Storage** below.
 
 ### Try it via Swagger
 
@@ -84,9 +85,11 @@ default, a deliberate per-deployment choice rather than a hardcoded behavior.
   stays confined to its own class; swapping is a config change, zero controller/service changes.
   See **Embeddings** below for the provider chain and the pgvector dimension constraint this
   implies.
-- **Storage**: `StorageProvider` interface, implemented by `R2StorageProvider` on the AWS S3 SDK
-  v2 - so the exact same code runs against real AWS S3 or a self-hosted MinIO too, by changing
-  only `R2_ENDPOINT`/`R2_REGION`, no code change.
+- **Storage**: `StorageProvider` interface. `R2StorageProvider` (default, `STORAGE_PROVIDER=r2`) on
+  the AWS S3 SDK v2 - so the exact same code runs against real AWS S3 or a self-hosted MinIO too, by
+  changing only `R2_ENDPOINT`/`R2_REGION`, no code change. `LocalFileStorageProvider`
+  (`STORAGE_PROVIDER=local`) stores uploads on a local docker volume instead - no bucket/credentials
+  needed, useful for local dev. See **Storage** below.
 - **Answers**: `AnswerProvider` interface (same swap pattern as `SearchProvider`), implemented by
   `ClaudeAnswerProvider` (default) and `OpenAiAnswerProvider`, selected via `ANSWER_PROVIDER`.
   `OpenAiAnswerProvider`'s `OPENAI_BASE_URL` also works against any OpenAI-API-compatible local
@@ -98,6 +101,29 @@ default, a deliberate per-deployment choice rather than a hardcoded behavior.
   `POST /api/workspace/api-keys`). Exposes `list_documents`, `search_documents`,
   `read_document_chunk`, `get_document_metadata`, `download_document`. It only returns data - it
   never calls an LLM or generates an answer.
+
+### Storage (`STORAGE_PROVIDER`)
+
+`STORAGE_PROVIDER=r2` (default) needs a real Cloudflare R2 (or AWS S3 / self-hosted MinIO) bucket -
+fine for production, but annoying friction just to try the app locally. Set
+`STORAGE_PROVIDER=local` instead to use `LocalFileStorageProvider`, which stores uploaded files on
+the `local_storage_data` docker volume (`LOCAL_STORAGE_PATH`, default `/app/local-storage`) - no
+bucket, no credentials, no external network call.
+
+The `StorageProvider` interface's `presignedDownloadUrl(key, ttl)` method doesn't have a filesystem
+equivalent to real S3 request signing, so `LocalFileStorageProvider` builds its own: a
+`GET /api/local-storage/download?key=...&expires=...&sig=...` URL where `sig` is an
+HMAC-SHA256 over `key` + `expires`, keyed by `app.jwt.secret` (no separate secret to configure).
+`LocalStorageDownloadController` verifies the signature and expiry before serving the file - this
+keeps the endpoint outside JWT auth (a presigned URL needs no separate app login, by definition)
+without turning it into an unauthenticated, unlimited-lifetime file server for anyone who learns a
+storage key. `LOCAL_STORAGE_PUBLIC_BASE_URL` (default `http://localhost:8080`) must be reachable by
+whoever calls that URL later - the browser locally, or an MCP agent calling `download_document`.
+
+Not meant for production: no replication/durability story, and the signing scheme is a simple HMAC,
+not real request signing. Switching back to `r2` is a one-line `.env` change - existing documents
+uploaded under the *other* provider won't be downloadable or re-processable until you switch back,
+since their `storageKey` only exists in that provider's backing store.
 
 ### Embeddings (`SEARCH_PROVIDER=embedding`)
 
@@ -167,10 +193,10 @@ footprint (~117M params, fits a 4GB-RAM deployment); its training data (mMARCO) 
 Turkish, so any Turkish benefit comes from cross-lingual transfer, not in-language fine-tuning -
 validate quality/latency on your own data before relying on it in production.
 
-#### Only run the `embeddings`/`reranker` containers you actually use
+#### Only run the `embeddings`/`reranker`/`ollama` containers you actually use
 
-Both are gated behind [Compose profiles](https://docs.docker.com/compose/how-tos/profiles/) so they
-don't start (and consume RAM/CPU) unless asked for - set `COMPOSE_PROFILES` in `.env`
+All three are gated behind [Compose profiles](https://docs.docker.com/compose/how-tos/profiles/) so
+they don't start (and consume RAM/CPU) unless asked for - set `COMPOSE_PROFILES` in `.env`
 (comma-separated, no spaces):
 
 | You want | Set |
@@ -178,12 +204,34 @@ don't start (and consume RAM/CPU) unless asked for - set `COMPOSE_PROFILES` in `
 | `EMBEDDING_PROVIDER=fallback`, no reranker | `COMPOSE_PROFILES=` (empty/unset) |
 | `EMBEDDING_PROVIDER=e5` | `COMPOSE_PROFILES=e5` |
 | `RERANKER_ENABLED=true` (either embedding provider) | add `reranker`, e.g. `COMPOSE_PROFILES=e5,reranker` |
+| `ANSWER_PROVIDER=openai` pointed at a local model instead of real OpenAI | add `ollama`, e.g. `COMPOSE_PROFILES=e5,reranker,ollama` |
 
 These don't derive each other automatically - keep `COMPOSE_PROFILES` in sync by hand whenever you
 change `EMBEDDING_PROVIDER`/`RERANKER_ENABLED`. Switching away from a profile you'd previously
 activated doesn't stop its container on its own either; run `docker compose stop embeddings` (or
 `reranker`) once after removing it from `COMPOSE_PROFILES`, on a small/resource-constrained
 deployment especially - an idle TEI container still holds its model in memory.
+
+#### Trying e5 + reranker + a local LLM together
+
+Production settled on fully cloud (`EMBEDDING_PROVIDER=fallback`, `ANSWER_PROVIDER=openai` against
+real OpenAI) because the three self-hosted pieces together (e5, reranker, and a containerized Qwen)
+didn't fit the 2 vCPU/3.8GB production server - e5 and the reranker each independently peaked over
+1.3-1.4GB RAM while actively embedding. On a beefier machine (e.g. Docker Desktop with several GB
+more headroom) all three can be worth trying together locally:
+
+```bash
+# .env: EMBEDDING_PROVIDER=e5, RERANKER_ENABLED=true, ANSWER_PROVIDER=openai,
+#       OPENAI_BASE_URL=http://ollama:11434/v1, OPENAI_MODEL=qwen2.5:1.5b,
+#       COMPOSE_PROFILES=e5,reranker,ollama
+docker compose --profile e5 --profile reranker --profile ollama up --build -d
+docker exec document-ai-ollama ollama pull qwen2.5:1.5b   # first time only; cached in the ollama_data volume after
+```
+
+No models ship with the `ollama` image, so the `pull` step is required once before the first ask.
+Keep `OPENAI_API_KEY` set to a real key if `EMBEDDING_PROVIDER=fallback`'s `openai` vendor also needs
+one - Ollama ignores whatever Bearer token it receives, so reusing the same key for both is safe and
+avoids the placeholder-key/real-key collision that broke production once.
 
 ### Tests
 
@@ -211,7 +259,8 @@ docker compose up --build
   ile
 
 R2 bilgileri yalnızca doküman yükleme/indirme için gereklidir; auth, arama ve API'nin geri kalanı
-bunlar olmadan da çalışır.
+bunlar olmadan da çalışır. Elinizde bir bucket yoksa `STORAGE_PROVIDER=local` ayarlayın - bkz.
+aşağıdaki **Storage** bölümü.
 
 ### Swagger Üzerinden Deneme
 
@@ -279,9 +328,12 @@ kapalıdır, sabit bir davranış değil, deployment başına bilinçli bir terc
   yalnızca kendi sınıfında kalır; değiştirmek bir config değişikliğidir, controller/service'e
   dokunulmaz. Provider zinciri ve pgvector boyut kısıtı için aşağıdaki **Embedding'ler** bölümüne
   bakın.
-- **Storage**: `StorageProvider` arayüzü, AWS S3 SDK v2 üzerinde `R2StorageProvider` ile
-  implemente edilmiştir - aynı kod, yalnızca `R2_ENDPOINT`/`R2_REGION` değiştirilerek gerçek AWS S3
-  veya kendi barındırdığınız MinIO'ya karşı da çalışır, kod değişikliği gerekmez.
+- **Storage**: `StorageProvider` arayüzü. `R2StorageProvider` (varsayılan, `STORAGE_PROVIDER=r2`),
+  AWS S3 SDK v2 üzerinde implemente edilmiştir - aynı kod, yalnızca `R2_ENDPOINT`/`R2_REGION`
+  değiştirilerek gerçek AWS S3 veya kendi barındırdığınız MinIO'ya karşı da çalışır, kod değişikliği
+  gerekmez. `LocalFileStorageProvider` (`STORAGE_PROVIDER=local`) yüklenen dosyaları yerel bir
+  docker volume'de tutar - bucket/credential gerekmez, local geliştirme için kullanışlıdır. Aşağıdaki
+  **Storage** bölümüne bakın.
 - **Answers**: `AnswerProvider` arayüzü (`SearchProvider` ile aynı değiştirme deseni),
   `ClaudeAnswerProvider` (varsayılan) ve `OpenAiAnswerProvider` ile implemente edilmiştir,
   `ANSWER_PROVIDER` ile seçilir. `OpenAiAnswerProvider`'ın `OPENAI_BASE_URL`'i herhangi bir
@@ -295,6 +347,32 @@ kapalıdır, sabit bir davranış değil, deployment başına bilinçli bir terc
   `POST /api/workspace/api-keys`). `list_documents`, `search_documents`, `read_document_chunk`,
   `get_document_metadata`, `download_document` araçlarını sunar. Yalnızca veri döner - hiçbir zaman
   LLM çağırmaz veya cevap üretmez.
+
+### Storage (`STORAGE_PROVIDER`)
+
+`STORAGE_PROVIDER=r2` (varsayılan) gerçek bir Cloudflare R2 (veya AWS S3 / kendi barındırdığınız
+MinIO) bucket'ı gerektirir - production için sorun değil, ama uygulamayı sadece denemek için
+local'de gereksiz bir sürtünme. Bunun yerine `STORAGE_PROVIDER=local` ayarlayarak
+`LocalFileStorageProvider`'ı kullanabilirsiniz - yüklenen dosyaları `local_storage_data` docker
+volume'ünde tutar (`LOCAL_STORAGE_PATH`, varsayılan `/app/local-storage`) - bucket yok, credential
+yok, dışarıya ağ çağrısı yok.
+
+`StorageProvider` arayüzünün `presignedDownloadUrl(key, ttl)` metodunun dosya sisteminde gerçek S3
+request signing'e denk bir karşılığı yok, bu yüzden `LocalFileStorageProvider` kendi mekanizmasını
+kurar: `GET /api/local-storage/download?key=...&expires=...&sig=...` şeklinde bir URL, burada `sig`,
+`key` + `expires` üzerinden `app.jwt.secret` ile keylenen bir HMAC-SHA256'dır (ayrı bir secret
+tanımlamaya gerek yok). `LocalStorageDownloadController` dosyayı sunmadan önce imzayı ve süre
+dolumunu doğrular - bu, endpoint'i JWT auth'un dışında tutarken (bir presigned URL'in tanımı gereği
+ayrı bir app login'ine ihtiyacı yoktur) bir storage key'i öğrenen herkes için sınırsız ömürlü,
+kimliksiz bir dosya sunucusuna dönüşmesini engeller. `LOCAL_STORAGE_PUBLIC_BASE_URL` (varsayılan
+`http://localhost:8080`), bu URL'i daha sonra çağıracak herkes tarafından erişilebilir olmalıdır -
+local'de tarayıcı, ya da `download_document`'ı çağıran bir MCP ajanı.
+
+Production için düşünülmemiştir: replikasyon/dayanıklılık garantisi yoktur, ve imzalama şeması
+gerçek request signing değil basit bir HMAC'tir. `r2`'ye geri dönmek tek satırlık bir `.env`
+değişikliğidir - *diğer* provider altında yüklenmiş dokümanlar, siz o provider'a geri dönene kadar
+indirilemez veya yeniden işlenemez, çünkü `storageKey`'leri yalnızca o provider'ın kendi
+deposunda var.
 
 ### Embedding'ler (`SEARCH_PROVIDER=embedding`)
 
@@ -367,6 +445,47 @@ docker-compose servisi tarafından sunulur) yeniden skorlar. Küçük ayak izi n
 (~117M parametre, 4GB RAM'lik bir deployment'a sığar); eğitim verisi (mMARCO) Türkçe
 **içermez**, yani Türkçe için herhangi bir fayda in-language fine-tuning'den değil, diller arası
 transferden gelir - production'da güvenmeden önce kendi verinizde kalite/gecikmeyi doğrulayın.
+
+#### Sadece kullandığınız `embeddings`/`reranker`/`ollama` container'larını çalıştırın
+
+Üçü de [Compose profilleri](https://docs.docker.com/compose/how-tos/profiles/) arkasına
+gizlenmiştir, yani istenmedikçe başlamazlar (RAM/CPU tüketmezler) - `.env` içinde
+`COMPOSE_PROFILES`'ı ayarlayın (virgülle ayrılmış, boşluksuz):
+
+| İstediğiniz | Ayarlayın |
+| --- | --- |
+| `EMBEDDING_PROVIDER=fallback`, reranker yok | `COMPOSE_PROFILES=` (boş/tanımsız) |
+| `EMBEDDING_PROVIDER=e5` | `COMPOSE_PROFILES=e5` |
+| `RERANKER_ENABLED=true` (her iki embedding provider için de) | `reranker` ekleyin, örn. `COMPOSE_PROFILES=e5,reranker` |
+| `ANSWER_PROVIDER=openai`'ı gerçek OpenAI yerine yerel bir modele yönlendirmek | `ollama` ekleyin, örn. `COMPOSE_PROFILES=e5,reranker,ollama` |
+
+Bunlar birbirini otomatik olarak türetmez - `EMBEDDING_PROVIDER`/`RERANKER_ENABLED` değiştirdiğinizde
+`COMPOSE_PROFILES`'ı elle senkron tutun. Daha önce etkinleştirdiğiniz bir profilden vazgeçmek de
+kendiliğinden container'ı durdurmaz; özellikle küçük/kaynak kısıtlı bir deployment'ta,
+`COMPOSE_PROFILES`'tan çıkardıktan sonra bir kez `docker compose stop embeddings` (veya `reranker`)
+çalıştırın - boşta duran bir TEI container'ı modelini bellekte tutmaya devam eder.
+
+#### e5 + reranker + yerel bir LLM'i birlikte denemek
+
+Production tamamen buluta yerleşti (`EMBEDDING_PROVIDER=fallback`, gerçek OpenAI'a karşı
+`ANSWER_PROVIDER=openai`) çünkü üç self-hosted parça birlikte (e5, reranker ve container'laştırılmış
+Qwen) production sunucusuna (2 vCPU/3.8GB) sığmadı - e5 ve reranker, aktif olarak embed ederken
+bağımsız şekilde 1.3-1.4GB RAM'in üzerine çıktı. Daha güçlü bir makinede (örn. birkaç GB daha fazla
+alanı olan Docker Desktop) üçünü birlikte lokal olarak denemek mantıklı olabilir:
+
+```bash
+# .env: EMBEDDING_PROVIDER=e5, RERANKER_ENABLED=true, ANSWER_PROVIDER=openai,
+#       OPENAI_BASE_URL=http://ollama:11434/v1, OPENAI_MODEL=qwen2.5:1.5b,
+#       COMPOSE_PROFILES=e5,reranker,ollama
+docker compose --profile e5 --profile reranker --profile ollama up --build -d
+docker exec document-ai-ollama ollama pull qwen2.5:1.5b   # sadece ilk seferde; sonra ollama_data volume'ünde önbelleklenir
+```
+
+`ollama` imajıyla hiçbir model gelmez, bu yüzden ilk sorudan önce `pull` adımı gereklidir.
+`EMBEDDING_PROVIDER=fallback`'in `openai` vendor'ı da bir anahtara ihtiyaç duyuyorsa
+`OPENAI_API_KEY`'i gerçek bir anahtarda tutun - Ollama kendisine gönderilen Bearer token'ı zaten
+dikkate almaz, bu yüzden aynı anahtarı ikisi için de kullanmak güvenlidir ve production'ı bir kez
+bozan placeholder-anahtar/gerçek-anahtar çakışmasından kaçınır.
 
 ### Testler
 

@@ -80,6 +80,10 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
+                        // Self-contained signed URL (key+expires+sig), not a JWT-authenticated
+                        // endpoint - see LocalStorageDownloadController. Only registered at all
+                        // when app.storage-provider=local.
+                        .requestMatchers("/api/local-storage/download").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();

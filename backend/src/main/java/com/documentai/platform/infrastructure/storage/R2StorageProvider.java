@@ -3,6 +3,7 @@ package com.documentai.platform.infrastructure.storage;
 import com.documentai.platform.config.R2Properties;
 import com.documentai.platform.exception.DocumentProcessingException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -18,6 +19,7 @@ import java.time.Duration;
 
 @Component
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "app.storage-provider", havingValue = "r2", matchIfMissing = true)
 public class R2StorageProvider implements StorageProvider {
 
     private final S3Client s3Client;

@@ -1,6 +1,7 @@
 package com.documentai.platform.config;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -14,6 +15,7 @@ import java.net.URI;
 
 @Configuration
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "app.storage-provider", havingValue = "r2", matchIfMissing = true)
 public class R2ClientConfig {
 
     private final R2Properties r2Properties;
