@@ -134,6 +134,13 @@ app:
   # openai.base-url at it and set this to 'openai'.
   answer-provider: ${ANSWER_PROVIDER:claude}
 
+  answer:
+    # How long to wait for a full completion before giving up (surfaces as a 502 to the caller).
+    # Cloud APIs rarely need more than the 120s default; a small local model on CPU-only hardware
+    # can legitimately take longer for longer/broader questions - raise this to match if you're
+    # seeing 502s with "I/O error ... POST ... /chat/completions: null" in the backend logs.
+    read-timeout-seconds: ${ANSWER_READ_TIMEOUT_SECONDS:120}
+
   claude:
     api-key: ${CLAUDE_API_KEY:}
     model: ${CLAUDE_MODEL:claude-sonnet-4-6}
