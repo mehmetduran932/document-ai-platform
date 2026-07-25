@@ -7,8 +7,10 @@
 #   - frontend is built with VITE_API_BASE_URL empty, so the SPA calls same-origin relative paths
 #     (e.g. /api/documents) which its own nginx (frontend/nginx.conf) proxies internally to
 #     `backend:8080` - one public domain/TLS cert covers the whole app.
-#   - backend gets extra_hosts for host.docker.internal, needed on Linux Docker Engine (unlike
-#     Docker Desktop) to reach a host-bound service such as a local Ollama install.
+#   - includes an `ollama` service (containerized, not the host's native install) so POST /api/ask
+#     can be answered by a local Qwen model over the standard container network - reaching a
+#     host-bound-only service from a container turned out to need more host firewall/routing
+#     surgery than it was worth on this box, so Ollama runs in-network instead.
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -67,13 +69,20 @@ services:
       RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
       RERANKER_BASE_URL: ${RERANKER_BASE_URL:-http://reranker:80}
       RERANKER_CANDIDATE_POOL_MULTIPLIER: ${RERANKER_CANDIDATE_POOL_MULTIPLIER:-3}
-    extra_hosts:
-      # Linux Docker Engine doesn't add this automatically the way Docker Desktop does - needed to
-      # reach a host-bound service (e.g. a local Ollama install) from inside the container.
-      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
+    networks: [internal]
+    restart: unless-stopped
+
+  ollama:
+    # Containerized Ollama serving the Qwen model(s) already pulled by the host's native install -
+    # the models directory is bind-mounted read-only so nothing needs re-downloading. Backend
+    # reaches it at OPENAI_BASE_URL=http://ollama:11434/v1 (Ollama's OpenAI-compatible route).
+    image: ollama/ollama:latest
+    container_name: document-ai-ollama
+    volumes:
+      - /usr/share/ollama/.ollama:/root/.ollama:ro
     networks: [internal]
     restart: unless-stopped
 
