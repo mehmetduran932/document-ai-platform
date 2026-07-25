@@ -81,6 +81,13 @@ services:
     # reaches it at OPENAI_BASE_URL=http://ollama:11434/v1 (Ollama's OpenAI-compatible route).
     image: ollama/ollama:latest
     container_name: document-ai-ollama
+    environment:
+      # Default 4096 - lowered to shrink the KV cache memory footprint on this 3.8GB box. Not
+      # lowered further than this: /api/ask grounds on up to 3 chunks of 400-700 words each
+      # (app.search.max-answer-chunks) with full untruncated content, which in Turkish can run
+      # ~3000+ tokens before the question/prompt template - a smaller window risks silently
+      # truncating grounding context.
+      OLLAMA_CONTEXT_LENGTH: "3072"
     volumes:
       - /usr/share/ollama/.ollama:/root/.ollama:ro
     networks: [internal]
