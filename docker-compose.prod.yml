@@ -1,0 +1,124 @@
+# Production topology for deployment behind a shared central-nginx reverse proxy (see README's
+# "MCP setup"/"Embeddings" sections and /opt/apps/reverse-proxy on the target server). Differs from
+# docker-compose.yml (local dev) in three ways:
+#   - No ports: published on postgres/backend/frontend - only the frontend joins the external
+#     apps-network so the shared reverse proxy can reach it by container name; postgres/backend
+#     stay on a private `internal` network only.
+#   - frontend is built with VITE_API_BASE_URL empty, so the SPA calls same-origin relative paths
+#     (e.g. /api/documents) which its own nginx (frontend/nginx.conf) proxies internally to
+#     `backend:8080` - one public domain/TLS cert covers the whole app.
+#   - backend gets extra_hosts for host.docker.internal, needed on Linux Docker Engine (unlike
+#     Docker Desktop) to reach a host-bound service such as a local Ollama install.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: document-ai-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-document_ai}
+      POSTGRES_USER: ${DB_USERNAME:-document_ai}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-document_ai}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-document_ai} -d ${DB_NAME:-document_ai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: document-ai-backend
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_NAME: ${DB_NAME:-document_ai}
+      DB_USERNAME: ${DB_USERNAME:-document_ai}
+      DB_PASSWORD: ${DB_PASSWORD:-document_ai}
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET must be set - generate with 'openssl rand -base64 48'}"
+      R2_ENDPOINT: ${R2_ENDPOINT:-https://placeholder.r2.cloudflarestorage.com}
+      R2_ACCESS_KEY: ${R2_ACCESS_KEY:-placeholder}
+      R2_SECRET_KEY: ${R2_SECRET_KEY:-placeholder}
+      R2_BUCKET: ${R2_BUCKET:-document-ai-platform}
+      R2_REGION: ${R2_REGION:-auto}
+      TESSERACT_LANG: ${TESSERACT_LANG:-eng}
+      FTS_LANGUAGE: ${FTS_LANGUAGE:-simple}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-keyword}
+      ANSWER_PROVIDER: ${ANSWER_PROVIDER:-claude}
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-6}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      VOYAGE_EMBEDDING_MODEL: ${VOYAGE_EMBEDDING_MODEL:-voyage-3.5}
+      VOYAGE_BASE_URL: ${VOYAGE_BASE_URL:-https://api.voyageai.com/v1}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-fallback}
+      EMBEDDING_CHAIN_ENABLED: ${EMBEDDING_CHAIN_ENABLED:-true}
+      EMBEDDING_PRIMARY_VENDOR: ${EMBEDDING_PRIMARY_VENDOR:-gemini}
+      E5_BASE_URL: ${E5_BASE_URL:-http://embeddings:80}
+      E5_MODEL: ${E5_MODEL:-intfloat/multilingual-e5-small}
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
+      RERANKER_BASE_URL: ${RERANKER_BASE_URL:-http://reranker:80}
+      RERANKER_CANDIDATE_POOL_MULTIPLIER: ${RERANKER_CANDIDATE_POOL_MULTIPLIER:-3}
+    extra_hosts:
+      # Linux Docker Engine doesn't add this automatically the way Docker Desktop does - needed to
+      # reach a host-bound service (e.g. a local Ollama install) from inside the container.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    restart: unless-stopped
+
+  embeddings:
+    profiles: ["e5"]
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    container_name: document-ai-embeddings
+    command: ["--model-id", "intfloat/multilingual-e5-small", "--auto-truncate"]
+    volumes:
+      - e5_model_cache:/data
+    networks: [internal]
+    restart: unless-stopped
+
+  reranker:
+    profiles: ["reranker"]
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    container_name: document-ai-reranker
+    command: ["--model-id", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1", "--auto-truncate"]
+    volumes:
+      - reranker_model_cache:/data
+    networks: [internal]
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Empty on purpose: the SPA calls same-origin relative paths (e.g. /api/documents), which
+        # this container's own nginx (frontend/nginx.conf) proxies to `backend:8080` internally -
+        # only this container needs to be reachable from outside, via apps-network below.
+        VITE_API_BASE_URL: ""
+    container_name: document-ai-frontend
+    depends_on:
+      - backend
+    networks: [internal, apps-network]
+    restart: unless-stopped
+
+networks:
+  internal:
+    driver: bridge
+  apps-network:
+    external: true
+
+volumes:
+  postgres_data:
+  e5_model_cache:
+  reranker_model_cache:
