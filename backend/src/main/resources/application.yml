@@ -78,6 +78,10 @@ app:
 
   mcp:
     enabled: ${MCP_ENABLED:true}
+    # Off by default: the MCP layer stays read-only (agents synthesize their own answers from
+    # search_documents' chunks) unless a deployment explicitly wants a server-side ask_documents
+    # tool too (same AnswerProvider/LLM as POST /api/ask). A per-deployment choice, not a default.
+    answer-tool-enabled: ${MCP_ANSWER_TOOL_ENABLED:false}
 
   # SearchProvider selection. 'keyword' (Postgres FTS, default) or 'embedding' (pgvector +
   # semantic matching - required for e.g. "poliçe tutarı" to find "prim tutarı"). Swapping is a

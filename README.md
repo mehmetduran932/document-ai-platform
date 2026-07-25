@@ -65,10 +65,11 @@ HTTP MCP):
 5. No special command needed in the new session - just ask naturally, Claude calls the right tool
    itself (e.g. "list my documents", "which chunk mentions X in my policy?").
 
-**The MCP layer never calls an LLM or generates an answer** - it only returns the relevant data
-(semantically, if embedding search is active); synthesis is always the connected agent's own job.
-`POST /api/ask`, by contrast, is a separate path where the backend generates the answer itself
-(via Claude/OpenAI).
+**The MCP layer never calls an LLM or generates an answer by default** - it only returns the
+relevant data (semantically, if embedding search is active); synthesis is the connected agent's own
+job. Set `MCP_ANSWER_TOOL_ENABLED=true` to additionally expose an `ask_documents` tool that
+generates an answer server-side using the same `AnswerProvider` as `POST /api/ask` - off by
+default, a deliberate per-deployment choice rather than a hardcoded behavior.
 
 ### Architecture
 
@@ -258,10 +259,11 @@ ajana) bağlamak için:
 5. Yeni oturumda özel bir komuta gerek yok - doğal dille sorun, Claude gerekli aracı kendisi
    çağırır (örn. "dokümanlarımı listele", "poliçemde X hangi chunk'ta geçiyor?").
 
-**MCP katmanı hiçbir zaman bir LLM çağırmaz veya cevap üretmez** - yalnızca (embedding araması
-aktifse anlamsal olarak) ilgili veriyi döndürür; sentezleme her zaman bağlı ajanın kendi işidir.
-`POST /api/ask` bunun aksine, cevabı backend'in kendi içinde (Claude/OpenAI ile) ürettiği ayrı bir
-yoldur.
+**MCP katmanı varsayılan olarak hiçbir zaman bir LLM çağırmaz veya cevap üretmez** - yalnızca
+(embedding araması aktifse anlamsal olarak) ilgili veriyi döndürür; sentezleme bağlı ajanın kendi
+işidir. `MCP_ANSWER_TOOL_ENABLED=true` ayarlanırsa, `POST /api/ask`'ın kullandığı aynı
+`AnswerProvider` ile sunucu tarafında cevap üreten bir `ask_documents` aracı da eklenir - varsayılan
+kapalıdır, sabit bir davranış değil, deployment başına bilinçli bir tercihtir.
 
 ### Mimari
 

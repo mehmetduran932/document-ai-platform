@@ -1,10 +1,13 @@
 package com.documentai.platform.infrastructure.mcp;
 
+import com.documentai.platform.config.McpProperties;
+import com.documentai.platform.dto.response.AskResponse;
 import com.documentai.platform.dto.response.DocumentChunkResponse;
 import com.documentai.platform.dto.response.DocumentResponse;
 import com.documentai.platform.dto.response.PageResponse;
 import com.documentai.platform.dto.response.SearchResultResponse;
 import com.documentai.platform.exception.ResourceNotFoundException;
+import com.documentai.platform.service.AskService;
 import com.documentai.platform.service.DocumentService;
 import com.documentai.platform.service.SearchService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,16 +22,21 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.BiFunction;
 
 /**
- * The five MCP tools external agents (Claude Code, Codex, Gemini CLI, ...) use to read a
- * workspace's documents. This layer is deliberately read/access-only: it never calls an LLM and
- * never generates an answer, it only fetches metadata and chunks that were already produced by
- * the search/processing pipeline.
+ * The MCP tools external agents (Claude Code, Codex, Gemini CLI, ...) use to read a workspace's
+ * documents. This layer is read/access-only by default: it never calls an LLM and never generates
+ * an answer, it only fetches metadata and chunks that were already produced by the search/
+ * processing pipeline - synthesis is left to the calling agent. The one exception is
+ * {@code ask_documents}, which only exists when {@link McpProperties#answerToolEnabled()} is
+ * explicitly turned on for this deployment (see application.yml) - it reuses the exact same
+ * {@link AskService} POST /api/ask calls into, so enabling it means this MCP server can generate
+ * answers server-side too, at the operator's choice rather than a hardcoded default.
  */
 @Component
 @RequiredArgsConstructor
@@ -39,10 +47,17 @@ public class DocumentMcpTools {
 
     private final DocumentService documentService;
     private final SearchService searchService;
+    private final AskService askService;
+    private final McpProperties mcpProperties;
     private final ObjectMapper objectMapper;
 
     public List<SyncToolSpecification> toolSpecifications() {
-        return List.of(listDocuments(), searchDocuments(), readDocumentChunk(), getDocumentMetadata(), downloadDocument());
+        List<SyncToolSpecification> tools = new ArrayList<>(List.of(
+                listDocuments(), searchDocuments(), readDocumentChunk(), getDocumentMetadata(), downloadDocument()));
+        if (mcpProperties.answerToolEnabled()) {
+            tools.add(askDocuments());
+        }
+        return tools;
     }
 
     private SyncToolSpecification listDocuments() {
@@ -84,6 +99,35 @@ public class DocumentMcpTools {
                 return errorResult("query is required");
             }
             SearchResultResponse.SearchResponseWrapper result = searchService.search(workspaceId, query);
+            return jsonResult(result);
+        });
+    }
+
+    /** Only registered when {@code app.mcp.answer-tool-enabled=true} - see the class Javadoc. */
+    private SyncToolSpecification askDocuments() {
+        Tool tool = Tool.builder()
+                .name("ask_documents")
+                .description("Ask a question and get a synthesized answer generated server-side (same "
+                        + "AnswerProvider as POST /api/ask), grounded only in the workspace's matched chunks. "
+                        + "Only available when this deployment has opted into server-side answer generation for "
+                        + "MCP - if you don't see this tool, use search_documents and synthesize the answer "
+                        + "yourself instead.")
+                .inputSchema(Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "question", Map.of("type", "string", "description", "The question to answer")
+                        ),
+                        "required", List.of("question")))
+                .build();
+
+        return withAuth(tool, (workspaceId, request) -> {
+            String question = stringArg(request, "question", null);
+            if (question == null || question.isBlank()) {
+                return errorResult("question is required");
+            }
+            // No caller-specific user id in the MCP transport context (auth is a workspace-scoped
+            // API key, not a per-user JWT) - AskHistory.askedBy is nullable for exactly this case.
+            AskResponse result = askService.ask(workspaceId, null, question);
             return jsonResult(result);
         });
     }
