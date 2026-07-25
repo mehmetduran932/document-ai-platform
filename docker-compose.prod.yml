@@ -88,7 +88,10 @@ services:
       # (app.search.max-answer-chunks) with full untruncated content, which in Turkish can run
       # ~3000+ tokens before the question/prompt template - a smaller window risks silently
       # truncating grounding context.
-      OLLAMA_CONTEXT_LENGTH: "3072"
+      # Pulled down further (was 3072) to save more memory while running alongside e5+reranker -
+      # risk: /api/ask's worst-case grounding (3 chunks x up to 700 words) can exceed this in
+      # Turkish, which would silently truncate context. Watch answer quality after this change.
+      OLLAMA_CONTEXT_LENGTH: "2048"
     volumes:
       - /usr/share/ollama/.ollama:/root/.ollama:ro
     networks: [internal]
